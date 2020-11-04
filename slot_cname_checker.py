@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+
 import json
 import dns.resolver
 import time
@@ -61,7 +62,7 @@ def get_property_hostnames(latestVersion, propertyId, contractId, groupId, path,
     # getting the list of groups and contracts assosciated to groups: https://developer.akamai.com/api/core_features/property_manager/v1.html#getgroups
     http_response = http_request.get(urljoin(baseurl, '/papi/v1/properties/'+propertyId+'/versions/'+str(latestVersion)+'/hostnames?contractId='+contractId+'&groupId='+groupId+'&validateHostnames=false&accountSwitchKey='+switchkey))
     http_status_code= http_response.status_code
-    http_content = json.loads(http_response.text)    
+    http_content = json.loads(http_response.text)
     try:
         test = http_content['hostnames']['items']
     except KeyError:
@@ -71,8 +72,18 @@ def get_property_hostnames(latestVersion, propertyId, contractId, groupId, path,
             property_hostnames_list=property_hostnames_list+[item['cnameFrom']]
     return(property_hostnames_list)
 
+def cname_chain_tester(hostname, slot):
+    answer_list = []
+    cname = hostname
+    output = (dns.resolver.query(cname,'CNAME', raise_on_no_answer=False))
+    while "akamai" not in cname:
+        output = (dns.resolver.query(cname,'CNAME', raise_on_no_answer=False))
+        cname = re.search('(.*) CNAME (.*)', str(output.rrset)).group(2)
+    if slot in cname:
+        answer_list = [hostname]
+    return (answer_list)
+
 def main():
-    
     # defining variables
     dict_list = []
     property_hostnames_list = []
@@ -82,14 +93,15 @@ def main():
     nb_properties = 0
     nb_hostnames = 0
     warning = False
-    nx_domain_list=[]
-    unknown_list=[]
-    timeout_list=[]
-    no_name_list=[]
-    
+    nx_domain_list = []
+    unknown_list = []
+    timeout_list = []
+    no_name_list = []
+    no_cname_list = []
+    cnamed_list = [] #list of property hostnames being CNAMEd
     # defining inputs &  argparse
-    parser = argparse.ArgumentParser(prog="edge_hostname_cname_checker.py v2.0", description="The edge_hostname_cname_checker.py script finds all property hostnames CNAMEd to an input Edge Hostname, within a Customer Account. The script uses edgegrid for python, dnspython and argparse libraries. Contributors: Miko (mswider) as Chief Programmer")
-    parser.add_argument("edge_hostname", default=None, type=str, help="Edge Hostname to be tested")
+    parser = argparse.ArgumentParser(prog="slot_cname_checker.py v1.0", description="The slot_cname_checker.py script finds all property hostnames for which a given slot appears, at some point, in the CNAME chain. The script uses edgegrid-python, dnspython and argparse libraries. Contributors: Miko (mswider) as Chief Programmer")
+    parser.add_argument("slot", default=None, type=str, help="Slot to be tested")
     env_edgerc = os.getenv("AKAMAI_EDGERC")
     default_edgerc = env_edgerc if env_edgerc else os.path.join(os.path.expanduser("~"), ".edgerc")
     parser.add_argument("--edgerc_path", help="Full Path to .edgerc File including the filename", default=default_edgerc)
@@ -98,13 +110,11 @@ def main():
     parser.add_argument("--section", help="Section Name in .edgerc File", required=False, default=default_edgerc_section)
     parser.add_argument("--switchkey", default="", required=False, help="Account SwitchKey")
     args = parser.parse_args()
-    
-    # Adjusting argpare variables with variables already used in previous version of script
-    edge_hostname =args.edge_hostname
+    # Adjusting argparse variables
+    slot = args.slot
     path = args.edgerc_path
     section = args.section
     switchkey = args.switchkey
-    
     # setting up authentication as in https://github.com/akamai/AkamaiOPEN-edgegrid-python
     try:
         edgerc = EdgeRc(path)
@@ -123,7 +133,6 @@ def main():
         http_response = http_request.get(urljoin(baseurl, '/papi/v1/groups?accountSwitchKey='+switchkey))
         http_status_code= http_response.status_code
         http_content= json.loads(http_response.text)
-        
         # Checking the first API call response code to avoid any exceptions further on ...
         if http_status_code == 200:
             print('Getting the list of all properties...')
@@ -156,9 +165,12 @@ def main():
                     warning = True
                     no_name_list = no_name_list + [hostname]
                 else:
-                    if edge_hostname in str(output.rrset):
-                        answer_list =  answer_list + [hostname]
-                        
+                    if "None" in str(output.rrset):
+                        no_cname_list = no_cname_list + [hostname]
+                    else:
+                        cnamed_list = cnamed_list + [hostname]
+            for hostname in cnamed_list:
+                answer_list = answer_list + cname_chain_tester(hostname,slot)
             # Displaying hostnames for which DNS resolution failed
             if timeout_list != []:
                 print('The DNS resolution failed with the exception dns.exception.Timeout for:')
@@ -172,27 +184,28 @@ def main():
             if no_name_list != []:
                 print('The DNS resolution failed with the exception dns.resolver.NoNameservers for:')
                 print(*no_name_list, sep = "\n")
-                
+            if no_cname_list != []:
+                print('The following domain names are not being CNAMEd:')
+                print(*no_cname_list, sep = "\n")
             # Displaying final answers
             if warning:
                 if answer_list == []:
-                    print("\nThe DNS (CNAME record) resolution was not successfull for the records printed above. Appart from these, there are no property hostnames CNAMEd to " + str(edge_hostname)+".")
+                    print("\nThe DNS (CNAME record) resolution was not successfull for the records printed above. Appart from these, there are no property hostnames having " + str(slot)+" in their CNAME chain.")
                     print("\n")
                 else:
-                    print("\nThe DNS (CNAME record) resolution was not successfull for the records printed above. Appart from these, the following property hostname(s) is/are CNAMEd to " + str(edge_hostname) + ":")
+                    print("\nThe DNS (CNAME record) resolution was not successfull for the records printed above. Appart from these, the following property hostname(s) has/have " + str(slot) + " in their CNAME chain:")
                     print(*answer_list, sep = "\n")
                     print("\n")
             else:
                 if answer_list == []:
-                    print("There are no property hostnames CNAMEd to " + str(edge_hostname)+".")
+                    print("There are no property hostnames having " + str(slot)+" in their CNAME chain.")
                     print("\n")
                 else:
-                    print("The following property hostname(s) is/are CNAMEd to " + str(edge_hostname) + ":")
+                    print("The following property hostname(s) has/have " + str(slot) + " in their CNAME chain:")
                     print(*answer_list, sep = "\n")
                     print("\n")
         else:
             print("\nAPI call not successful!")
             print(http_response.text)
-            
 if __name__ == '__main__':
     main()

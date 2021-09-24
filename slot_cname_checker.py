@@ -74,12 +74,12 @@ def get_property_hostnames(latestVersion, propertyId, contractId, groupId, path,
 
 def cname_chain_tester(hostname, slot):
     answer_list = []
-    cname = hostname
-    output = (dns.resolver.query(cname,'CNAME', raise_on_no_answer=False))
-    while "akamai" not in cname:
-        output = (dns.resolver.query(cname,'CNAME', raise_on_no_answer=False))
-        cname = re.search('(.*) CNAME (.*)', str(output.rrset)).group(2)
-    if slot in cname:
+    output = (dns.resolver.resolve(hostname,'CNAME', raise_on_no_answer=False))
+    
+    while "CNAME" in output.rrset and "akamai" not in hostname:
+        hostame = re.search('(.*) CNAME (.*)', str(output.rrset)).group(2)
+        output = (dns.resolver.resolve(hostname,'CNAME', raise_on_no_answer=False))
+    if slot in hostname:
         answer_list = [hostname]
     return (answer_list)
 
@@ -151,7 +151,7 @@ def main():
             print('\nProceeding with DNS (CNAME record) resolution of all property hostnames...')
             for hostname in property_hostnames_list:
                 try:
-                    output = (dns.resolver.query(hostname,'CNAME', raise_on_no_answer=False))
+                    output = (dns.resolver.resolve(hostname,'CNAME', raise_on_no_answer=False))
                 except dns.exception.Timeout:
                     warning = True
                     timeout_list = timeout_list + [hostname]
@@ -209,3 +209,4 @@ def main():
             print(http_response.text)
 if __name__ == '__main__':
     main()
+
